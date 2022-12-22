@@ -1,15 +1,6 @@
-import {useAuth, useState} from "#imports";
-import {EventEmitter} from "events";
+import {authFetch, useState} from "#imports";
+import {InitState, Paginated, Query} from "~/type/interfaces";
 
-export type Query = {
-    $limit?: number,
-    $search?: Object,
-    $populate?: string[] | string | Object | Object[],
-    $sort?: Object,
-    $select?: string | string[],
-    page?: number,
-    [key: string]: any
-}
 
 export enum Events {
     ERROR = 'error',
@@ -27,160 +18,244 @@ export enum Methods {
     DELETE = 'delete'
 }
 
-export interface Paginated<T> {
-    page: number,
-    docs: T[],
-    currentPage: number,
-    nextPage: number | null,
-    prevPage: number | null,
-    limit: number,
-    totalPages: number,
-    totalDocs: number,
-}
 
-
-export interface InitState<T> {
-    isFindPending: boolean,
-    isCreatePending: boolean,
-    isUpdatePending: boolean,
-    isRemovePending: boolean,
-    isGetPending: boolean,
-    updateIds: string[],
-    removeIds: string[],
-    paginated: Paginated<T>,
-    errors: any[],
-
-    [key: string]: any,
-}
-
-export class Model<T> extends EventEmitter {
+export class BaseModel<T, S = any> {
     STATE;
     PATH;
     FETCH;
 
     constructor(path: string, state?: any) {
-        super()
         this.PATH = path;
-        this.STATE = useState<InitState<T>>(this.PATH, () => ({
+        this.STATE = useState<InitState<T> & S>(this.PATH, () => ({
             isFindPending: false,
             isCreatePending: false,
             isUpdatePending: false,
             isRemovePending: false,
             isGetPending: false,
-            updateIds: [],
-            removeIds: [],
-            paginated: {},
-            errors: [],
+            pendingUpdateIds: [],
+            pendingRemoveIds: [],
+            paginated: {
+                docs: [],
+                page: 1,
+                totalPages: 1,
+                limit: 21,
+                currentPage: 1,
+                nextPage: null,
+                prevPage: null,
+                totalDocs: 1
+            },
+            error: [],
             ...state
         }));
-        const {authFetch} = useAuth();
         this.FETCH = authFetch;
-        this.addListener(Events.ERROR, this.onErrorHandler)
     }
 
-    async find(query?: Query): Promise<Paginated<T>> {
-        try {
-            this.STATE.value.isFindPending = true;
-            const result = await this.FETCH<Paginated<T>>(this.PATH, {query})
-            this.STATE.value.paginated = result;
-            this.STATE.value.isFindPending = false;
-            this.emit(Events.FIND, result)
-            return result;
-        } catch (e) {
-            this.STATE.value.isFindPending = false;
-            this.emit(Events.ERROR, e)
-            throw e
-        }
-    }
 
-    async get(id: string, query?: Query): Promise<T> {
-        try {
-            this.STATE.value.isGetPending = true;
-            const result = await this.FETCH<T>(`${this.PATH}/${id}`, {query})
-            this.STATE.value.isGetPending = false;
-            this.emit(Events.GET, result)
-            return result;
-        } catch (e) {
-            this.STATE.value.isGetPending = false;
-            this.emit(Events.ERROR, e)
-            throw e;
-        }
-    }
+    async find(query?: Query, server?: boolean) {
+        return this.FETCH<Paginated<T>>(this.PATH, {
+            server,
+            query,
+            onRequest: () => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    error: null,
+                    isFindPending: true
+                }
+            },
+            onResponse: ({response}) => {
+                if (!response.ok) return;
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isFindPending: false,
+                    paginated: response._data
+                }
 
-    async update(id: string, body: T, query?: Query): Promise<T> {
-        try {
-            this.STATE.value = {
-                ...this.STATE.value,
-                isUpdatePending: true,
-                updateIds: [...this.STATE.value.updateIds, id]
+            },
+            onResponseError: ({response}) => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isFindPending: false,
+                    error: response._data
+                }
             }
-            const result = await this.FETCH<T>(`${this.PATH}/${id}`, {method: Methods.PUT, body, query});
-            this.STATE.value = {
-                ...this.STATE.value,
-                isUpdatePending: false,
-                updateIds: this.STATE.value.updateIds.filter((v: string) => v !== id)
-            }
-            this.emit(Events.UPDATED, id, result)
-            return result;
-        } catch (e) {
-            this.STATE.value = {
-                ...this.STATE.value,
-                isUpdatePending: false,
-                updateIds: this.STATE.value.updateIds.filter((v: string) => v !== id)
-            }
-            this.emit(Events.ERROR, e)
-            throw e
-        }
+        })
+
     }
 
-    async remove(id: string, query?: Query): Promise<T> {
-        try {
-            this.STATE.value = {
-                ...this.STATE.value,
-                isRemovePending: true,
-                removeIds: [...this.STATE.value.removeIds, id]
+    async get(id: string, query?: Query, server?: boolean) {
+        return this.FETCH<T>(`${this.PATH}/${id}`, {
+            query,
+            server,
+            onRequest: () => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    error: null,
+                    isGetPending: true
+                }
+            },
+            onResponse: ({response}) => {
+                if (!response.ok) return;
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isGetPending: false,
+                    error: null,
+                }
+
+            },
+            onResponseError: ({response}) => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isGetPending: false,
+                    error: response._data
+                }
             }
-            const result = await this.FETCH<T>(`${this.PATH}/${id}`, {method: Methods.DELETE, query});
-            this.STATE.value = {
-                ...this.STATE.value,
-                isRemovePending: false,
-                removeIds: this.STATE.value.removeIds.filter((v: string) => v !== id)
-            }
-            this.emit(Events.REMOVED, id, result)
-            return result;
-        } catch (e) {
-            this.STATE.value = {
-                ...this.STATE.value,
-                isRemovePending: false,
-                removeIds: this.STATE.value.removeIds.filter((v: string) => v !== id)
-            }
-            this.emit(Events.ERROR, e)
-            throw e;
-        }
+        })
     }
 
-    async create(body: T): Promise<T> {
-        try {
-            this.STATE.value.isCreatePending = true;
-            const result = await this.FETCH<T>(this.PATH, {method: Methods.POST, body})
-            this.STATE.value.isCreatePending = false;
-            this.emit(Events.CREATED, result)
-            return result;
-        } catch (e) {
-            this.STATE.value.isCreatePending = false;
-            this.emit(Events.ERROR, e)
-            throw e
-        }
+    async update(id: string, body: T, query?: Query, server?: boolean) {
+        return this.FETCH<T>(`${this.PATH}/${id}`, {
+            method: Methods.PUT,
+            query,
+            body,
+            server,
+            onRequest: () => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isUpdatePending: true,
+                    pendingUpdateIds: [...this.STATE.value.pendingUpdateIds, id]
+                }
+            },
+            onResponse: ({response}) => {
+                if (!response.ok) return;
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isUpdatePending: false,
+                    pendingUpdateIds: this.STATE.value.pendingUpdateIds.filter((v: string) => v !== id)
+                }
+
+            },
+            onResponseError: ({response}) => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isUpdatePending: false,
+                    pendingUpdateIds: this.STATE.value.pendingUpdateIds.filter((v: string) => v !== id),
+                    error: response._data
+                }
+            }
+        })
+
     }
 
-    get state() {
-        return this.STATE.value;
+    async remove(id: string, query?: Query, server?: boolean) {
+        return this.FETCH<T>(`${this.PATH}/${id}`, {
+            method: Methods.DELETE,
+            query,
+            server,
+            onRequest: () => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isRemovePending: true,
+                    pendingRemoveIds: [...this.STATE.value.pendingRemoveIds, id]
+                }
+            },
+            onResponse: ({response}) => {
+                if (!response.ok) return;
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isRemovePending: false,
+                    pendingRemoveIds: this.STATE.value.pendingRemoveIds.filter((v: string) => v !== id)
+                }
+            },
+            onResponseError: ({response}) => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isRemovePending: false,
+                    pendingRemoveIds: this.STATE.value.pendingRemoveIds.filter((v: string) => v !== id),
+                    error: response._data
+                }
+            }
+        })
     }
 
-    onErrorHandler(e: any) {
-        if (this.STATE.value.errors.length > 10)
-            this.STATE.value.errors.pop()
-        this.STATE.value.errors.unshift(e)
+    async create(body: T, query?: Query, server?: boolean) {
+        return this.FETCH<T>(this.PATH, {
+            query,
+            server,
+            method: Methods.POST,
+            onRequest: () => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    error: null,
+                    isCreatePending: true
+                }
+            },
+            onResponse: ({response}) => {
+                if (!response.ok) return;
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isCreatePending: false,
+                    error: null,
+                }
+
+            },
+            onResponseError: ({response}) => {
+                this.STATE.value = {
+                    ...this.STATE.value,
+                    isCreatePending: false,
+                    error: response._data
+                }
+            }
+        })
+    }
+
+    get state(): InitState<T> & S {
+        const {value} = this.STATE;
+        return value;
+    }
+
+    get paginated(): Paginated<T> {
+        const {paginated} = this.STATE.value;
+        return paginated;
+    }
+
+    get isFindPending(): boolean {
+        const {isFindPending} = this.STATE.value;
+        return isFindPending;
+    }
+
+    get isUpdatePending(): boolean {
+        const {isUpdatePending} = this.STATE.value;
+        return isUpdatePending;
+    }
+
+    get isRemovePending(): boolean {
+        const {isRemovePending} = this.STATE.value;
+        return isRemovePending;
+    }
+
+    get isCreatePending(): boolean {
+        const {isCreatePending} = this.STATE.value;
+        return isCreatePending;
+    }
+
+    get isGetPending(): boolean {
+        const {isGetPending} = this.STATE.value;
+        return isGetPending;
+    }
+
+    get pendingUpdateIds(): string[] {
+        const {pendingUpdateIds} = this.STATE.value;
+        return pendingUpdateIds;
+    }
+
+    get pendingRemoveIds(): string[] {
+        const {pendingRemoveIds} = this.STATE.value;
+        return pendingRemoveIds;
+    }
+
+    get error(): string {
+        const {error} = this.STATE.value;
+        return error;
     }
 
 
