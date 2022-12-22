@@ -44,7 +44,7 @@ export class BaseModel<T, S = any> {
                 prevPage: null,
                 totalDocs: 1
             },
-            error: [],
+            error: null,
             ...state
         }));
         this.FETCH = authFetch;
@@ -253,7 +253,7 @@ export class BaseModel<T, S = any> {
         return pendingRemoveIds;
     }
 
-    get error(): string {
+    get error(): any {
         const {error} = this.STATE.value;
         return error;
     }
