@@ -5,4 +5,4 @@ class Something extends BaseModel<any> {
 
 }
 
-export const useSomething = () => new Something('tracks');
+export const useSomething = () => new Something('something');
